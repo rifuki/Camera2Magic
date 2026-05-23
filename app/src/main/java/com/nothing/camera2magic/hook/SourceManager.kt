@@ -209,7 +209,7 @@ object SourceManager {
 
             options.inJustDecodeBounds = false
             options.inPreferredConfig = Bitmap.Config.ARGB_8888
-            options.inSampleSize = calculateInSampleSize(options, 1080, 1920)
+            options.inSampleSize = calculateInSampleSize(options, 1440, 2560)
 
             val bitmap = contentResolver.openInputStream(uri)?.use { stream ->
                 BitmapFactory.decodeStream(stream, null, options)
