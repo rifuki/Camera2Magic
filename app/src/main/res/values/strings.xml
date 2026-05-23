@@ -18,6 +18,7 @@
     <!--settings-->
     <string name="play_sound_button_name">Play Sound</string>
     <string name="enable_log_button_name">Enable Log</string>
+    <string name="instant_fit_button_name">Instant Fit</string>
     <string name="inject_control_button_name">Inject Menu</string>
     <string name="manually_rotate_button_name">manually rotate</string>
 

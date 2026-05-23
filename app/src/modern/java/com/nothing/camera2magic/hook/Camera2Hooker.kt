@@ -178,6 +178,7 @@ object Camera2Hooker {
             "createCaptureSession",
             SessionConfiguration::class.java)
         magic.hook(createCaptureSession).intercept { chain ->
+            SourceManager.refreshAndDispatch(force = true)
             if (!SourceManager.isReadyForHook()) return@intercept chain.proceed()
             val camera = chain.thisObject as CameraDevice
             activeCameraRef = WeakReference(camera)
@@ -222,6 +223,7 @@ object Camera2Hooker {
             CameraCaptureSession.StateCallback::class.java,
             Handler::class.java)
         magic.hook(createCaptureSession).intercept { chain ->
+            SourceManager.refreshAndDispatch(force = true)
             if (!SourceManager.isReadyForHook()) return@intercept chain.proceed()
             val camera = chain.thisObject as CameraDevice
             activeCameraRef = WeakReference(camera)

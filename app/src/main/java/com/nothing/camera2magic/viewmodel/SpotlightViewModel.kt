@@ -20,6 +20,7 @@ data class SpotlightUiState(
     val moduleEnabled: Boolean = true,
     val selectedMediaSource: MediaSource = MediaSource.LOCAL,
     val currentType: MediaType = MediaType.VIDEO,
+    val squareImageFit: Boolean = false,
 )
 
 class SpotlightViewModel(
@@ -60,6 +61,14 @@ class SpotlightViewModel(
         }
     }
 
+    fun onSquareImageFitToggled() {
+        _uiState.update { currentState ->
+            val newState = !currentState.squareImageFit
+            repository.squareImageFit = newState
+            currentState.copy(squareImageFit = newState)
+        }
+    }
+
     fun onMediaSelected(type: MediaType, uri: Uri?) {
         if (uri == null) return
         val mediaId = resolveMediaId(type, uri)
@@ -92,7 +101,8 @@ class SpotlightViewModel(
             it.copy(
                 moduleEnabled = repository.moduleEnabled,
                 selectedMediaSource = MediaSource.fromValue(repository.mediaSource),
-                currentType = MediaType.fromValue(repository.localMediaType)
+                currentType = MediaType.fromValue(repository.localMediaType),
+                squareImageFit = repository.squareImageFit
             )
         }
     }

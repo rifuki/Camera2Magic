@@ -107,6 +107,10 @@ class ConfigRepository(private val prefs: SharedPreferences) {
         get() = prefs.getBoolean("main_enable_log", false)
         set(value) = save("main_enable_log", value)
 
+    var squareImageFit: Boolean
+        get() = prefs.getBoolean("main_square_image_fit", false)
+        set(value) = save("main_square_image_fit", value)
+
     var injectMenu: Boolean
         get() = prefs.getBoolean("main_inject_menu", false)
         set(value) = save("main_inject_menu", value)

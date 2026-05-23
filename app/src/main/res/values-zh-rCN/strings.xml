@@ -13,6 +13,7 @@
     <string name="module_switch_name">开启模块</string>
     <string name="play_sound_button_name">播放声音</string>
     <string name="enable_log_button_name">打印日志</string>
+    <string name="instant_fit_button_name">Instant适配</string>
     <string name="inject_control_button_name">浮动控制台</string>
     <string name="manually_rotate_button_name">旋转画面</string>
     <string name="work_mode_normal">拍照</string>

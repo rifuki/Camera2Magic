@@ -1,25 +1,42 @@
 package com.nothing.camera2magic.hook
 
 import android.content.ContentUris
+import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.RectF
 import android.media.ExifInterface
 import android.net.Uri
 import android.provider.MediaStore
+import android.util.DisplayMetrics
+import android.view.WindowManager
 import com.nothing.camera2magic.GlobalState
+import com.nothing.camera2magic.utils.Dog
 import java.io.FileNotFoundException
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 
 object SourceManager {
     private const val TAG = "[MediaSource]"
+    private const val INSTANT_FRAME_ASPECT_WIDTH = 4f
+    private const val INSTANT_FRAME_ASPECT_HEIGHT = 3f
+    private const val INSTAGRAM_QUICKSNAP_MARGIN_DIMEN_ID = 0x7f070000
+    private const val INSTAGRAM_QUICKSNAP_MARGIN_DP = 16f
     private const val LOCAL_MEDIA_TYPE_VIDEO = 0x0000
     private const val LOCAL_MEDIA_TYPE_IMAGE = 0x0001
     private const val NETWORK_MEDIA_TYPE_RTSP = 0x0100
     private const val KEY_MODULE_ENABLED = "main_module_enabled"
     private const val KEY_PLAY_SOUND = "main_play_sound"
     private const val KEY_ENABLE_LOG = "main_enable_log"
+    private const val KEY_SQUARE_IMAGE_FIT = "main_square_image_fit"
     private const val KEY_MEDIA_SOURCE = "media_source" // 0: local, 1: network
     private const val KEY_LOCAL_MEDIA_TYPE = "local_media_type" // 0: video, 1: image
     private const val KEY_LOCAL_VIDEO_ID = "local_video_id"
@@ -36,6 +53,9 @@ object SourceManager {
     private var playSound: Boolean = false
     @Volatile
     var enableLog: Boolean = false
+        private set
+    @Volatile
+    var squareImageFit: Boolean = false
         private set
     @Volatile
     private var mediaSource: Int = 0
@@ -62,14 +82,15 @@ object SourceManager {
         refreshPrefs()
     }
 
-    fun refreshAndDispatch() {
+    fun refreshAndDispatch(force: Boolean = false) {
         refreshPrefs()
         if (!moduleEnabled) {
             toastMessage = "模块未启用"
             return
         }
         val fingerprint = getMediaFingerprint()
-        if (fingerprint != lastMediaFingerprint) {
+        if (force || fingerprint != lastMediaFingerprint) {
+            Dog.i(TAG, "dispatch force=$force fingerprint=$fingerprint", enableLog)
             dispatchMediaSourceToNative()
             lastMediaFingerprint = fingerprint
         }
@@ -81,6 +102,7 @@ object SourceManager {
             moduleEnabled = prefs.getBoolean(KEY_MODULE_ENABLED, true)
             playSound = prefs.getBoolean(KEY_PLAY_SOUND, false)
             enableLog = prefs.getBoolean(KEY_ENABLE_LOG, false)
+            squareImageFit = prefs.getBoolean(KEY_SQUARE_IMAGE_FIT, false)
 
             mediaSource = prefs.getInt(KEY_MEDIA_SOURCE, 0)
             mediaType = prefs.getInt(KEY_LOCAL_MEDIA_TYPE, 0)
@@ -91,6 +113,11 @@ object SourceManager {
             rtspUri = prefs.getString(KEY_NETWORK_RTSP_URI, "") ?: ""
 
             NativeBridge.updateGlobalConfig(playSound, enableLog)
+            Dog.i(
+                TAG,
+                "prefs enabled=$moduleEnabled media=$selectedMedia image=$imageId squareFit=$squareImageFit log=$enableLog",
+                enableLog
+            )
 
         } catch (e: Exception) { /* Do Nothing */ }
     }
@@ -109,7 +136,7 @@ object SourceManager {
     private fun getMediaFingerprint(): String {
         return when (selectedMedia) {
             0x0000 -> "$selectedMedia:$videoId"
-            0x0001 -> "$selectedMedia:$imageId"
+            0x0001 -> "$selectedMedia:$imageId:$squareImageFit"
             0x0100 -> "$selectedMedia:$rtspUri"
             else -> ""
         }
@@ -158,6 +185,7 @@ object SourceManager {
         val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, imageId)
         val contentResolver = GlobalState.appContext.contentResolver
         val result = runCatching {
+            Dog.i(TAG, "update image id=$imageId squareFit=$squareImageFit", enableLog)
             val exifOrientation = readExifOrientation(uri)
             val options = BitmapFactory.Options().apply {
                 inJustDecodeBounds = true
@@ -174,10 +202,14 @@ object SourceManager {
                 BitmapFactory.decodeStream(stream, null, options)
             } ?: throw IllegalStateException("无法解码图片")
             val orientedBitmap = applyExifOrientation(bitmap, exifOrientation)
+            val nativeBitmap = prepareImageForNative(orientedBitmap)
 
             try {
-                NativeBridge.processBitmap(orientedBitmap)
+                NativeBridge.processBitmap(nativeBitmap)
             } finally {
+                if (nativeBitmap !== orientedBitmap) {
+                    nativeBitmap.recycle()
+                }
                 if (orientedBitmap !== bitmap) {
                     orientedBitmap.recycle()
                 }
@@ -195,6 +227,95 @@ object SourceManager {
             }
             updateState(false, msg)
         }
+    }
+
+    private fun prepareImageForNative(bitmap: Bitmap): Bitmap {
+        if (!squareImageFit) return bitmap
+
+        val visibleSize = min(bitmap.width, bitmap.height).let { it - (it % 2) }
+        if (visibleSize <= 0) return bitmap
+
+        val frameHeight = visibleSize
+        val frameWidth = (frameHeight * INSTANT_FRAME_ASPECT_WIDTH / INSTANT_FRAME_ASPECT_HEIGHT)
+            .roundToInt()
+            .let { it - (it % 2) }
+            .coerceAtLeast(frameHeight)
+
+        val instantBitmap = Bitmap.createBitmap(frameWidth, frameHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(instantBitmap)
+        canvas.drawColor(Color.BLACK)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
+        val displayMetrics = getRealDisplayMetrics()
+        val displayWidth = displayMetrics.widthPixels.coerceAtLeast(1)
+        val quickSnapSurfaceHeight = getQuickSnapSurfaceHeightPx(displayWidth)
+        val quickSnapMargin = getQuickSnapMarginPx()
+        val quickSnapSide = (displayWidth - (quickSnapMargin * 2)).coerceAtLeast(1)
+        val previewScale = max(
+            displayWidth.toFloat() / frameWidth.toFloat(),
+            quickSnapSurfaceHeight.toFloat() / frameHeight.toFloat()
+        )
+        val sampledSize = quickSnapSide.toFloat() / previewScale
+        val sampledLeft = (((frameWidth * previewScale) - displayWidth) / 2f + quickSnapMargin) / previewScale
+        val sampledTop = 0f
+
+        val backgroundScale = max(
+            frameWidth.toFloat() / bitmap.width.toFloat(),
+            frameHeight.toFloat() / bitmap.height.toFloat()
+        )
+        val backgroundWidth = bitmap.width * backgroundScale
+        val backgroundHeight = bitmap.height * backgroundScale
+        val backgroundLeft = (frameWidth - backgroundWidth) / 2f
+        val backgroundTop = (frameHeight - backgroundHeight) / 2f
+        canvas.drawBitmap(
+            bitmap,
+            null,
+            RectF(backgroundLeft, backgroundTop, backgroundLeft + backgroundWidth, backgroundTop + backgroundHeight),
+            paint
+        )
+
+        val srcLeft = (bitmap.width - visibleSize) / 2
+        val srcTop = (bitmap.height - visibleSize) / 2
+        canvas.drawBitmap(
+            bitmap,
+            Rect(srcLeft, srcTop, srcLeft + visibleSize, srcTop + visibleSize),
+            RectF(sampledLeft, sampledTop, sampledLeft + sampledSize, sampledTop + sampledSize),
+            paint
+        )
+        Dog.i(
+            TAG,
+            "Instant compensate source ${bitmap.width}x${bitmap.height} -> ${frameWidth}x${frameHeight}, " +
+                "surface=${displayWidth}x$quickSnapSurfaceHeight, final=${quickSnapSide}x$quickSnapSide, " +
+                "sample=${sampledLeft.roundToInt()},0 ${sampledSize.roundToInt()}x${sampledSize.roundToInt()}",
+            enableLog
+        )
+        return instantBitmap
+    }
+
+    private fun getQuickSnapMarginPx(): Int {
+        val resources = GlobalState.appContext.resources
+        return runCatching {
+            resources.getDimensionPixelSize(INSTAGRAM_QUICKSNAP_MARGIN_DIMEN_ID)
+        }.getOrElse {
+            (INSTAGRAM_QUICKSNAP_MARGIN_DP * resources.displayMetrics.density).roundToInt()
+        }.coerceAtLeast(0)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun getRealDisplayMetrics(): DisplayMetrics {
+        val metrics = DisplayMetrics()
+        val windowManager = GlobalState.appContext.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        if (windowManager != null) {
+            windowManager.defaultDisplay.getRealMetrics(metrics)
+        } else {
+            metrics.setTo(GlobalState.appContext.resources.displayMetrics)
+        }
+        return metrics
+    }
+
+    private fun getQuickSnapSurfaceHeightPx(surfaceWidth: Int): Int {
+        return (surfaceWidth * INSTANT_FRAME_ASPECT_WIDTH / INSTANT_FRAME_ASPECT_HEIGHT)
+            .roundToInt()
+            .coerceAtLeast(surfaceWidth)
     }
 
     private fun readExifOrientation(uri: Uri): Int {

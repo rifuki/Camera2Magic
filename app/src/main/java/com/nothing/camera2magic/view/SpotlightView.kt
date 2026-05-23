@@ -88,10 +88,16 @@ fun SpotlightView() {
                 mediaTypes = mediaTypes,
                 thumbnails = mediaThumbnails,
                 currentType = uiState.currentType,
+                squareImageFit = uiState.squareImageFit,
                 onPickMedia = { type -> pickMedia(type) },
                 onClearMedia = { type -> viewModel.clearMediaBy(type)},
                 onTypeSelected = { type -> viewModel.setCurrentMediaType(type) }
 
+            )
+            InstantFitToggle(
+                enabled = uiState.currentType == MediaType.IMAGE,
+                checked = uiState.squareImageFit,
+                onToggle = { viewModel.onSquareImageFitToggled() }
             )
             ModuleSwitch(
                 text = stringResource(R.string.module_switch_name),
@@ -134,6 +140,7 @@ private fun MediaPreviewGrid(
     mediaTypes: EnumEntries<MediaType>,
     thumbnails: Map<MediaType, Bitmap?>,
     currentType: MediaType,
+    squareImageFit: Boolean,
     onPickMedia: (MediaType) -> Unit,
     onClearMedia: (MediaType) -> Unit,
     onTypeSelected: (MediaType) -> Unit,
@@ -148,6 +155,7 @@ private fun MediaPreviewGrid(
                 MediaThumbnailCard(
                     thumbnail = thumbnails[type],
                     mediaType = type,
+                    instantPreview = squareImageFit && type == MediaType.IMAGE,
                     onClick = { onPickMedia(type) },
                     onClear = { onClearMedia(type) }
                 )
@@ -161,10 +169,32 @@ private fun MediaPreviewGrid(
 }
 
 @Composable
+private fun InstantFitToggle(
+    enabled: Boolean,
+    checked: Boolean,
+    onToggle: () -> Unit
+) {
+    FilterChip(
+        selected = checked,
+        enabled = enabled,
+        onClick = onToggle,
+        label = { Text(stringResource(R.string.instant_fit_button_name)) },
+        leadingIcon = {
+            Icon(
+                imageVector = ImageVector.vectorResource(R.drawable.image_24px),
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    )
+}
+
+@Composable
 private fun MediaThumbnailCard(
     modifier: Modifier = Modifier,
     mediaType: MediaType,
     thumbnail: Bitmap?,
+    instantPreview: Boolean,
     onClick: () -> Unit,
     onClear: () -> Unit
 ) {
@@ -191,7 +221,8 @@ private fun MediaThumbnailCard(
 
     Box(
         modifier = modifier
-            .aspectRatio(9f / 16f).clip(RoundedCornerShape(12.dp))
+            .aspectRatio(if (instantPreview) 1f else 9f / 16f)
+            .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surface)
             .combinedClickable(
                 onClick = ::handleOnClick,
@@ -199,13 +230,13 @@ private fun MediaThumbnailCard(
             ),
         contentAlignment = Alignment.Center
     ) {
-        ThumbnailContent(thumbnail, mediaType)
+        ThumbnailContent(thumbnail, mediaType, instantPreview)
         DeleteModeOverlay(isInDeleteMode, ::handleOnClear)
     }
 }
 
 @Composable
-private fun ThumbnailContent(thumbnail: Bitmap?, mediaType: MediaType) {
+private fun ThumbnailContent(thumbnail: Bitmap?, mediaType: MediaType, instantPreview: Boolean) {
     if (thumbnail != null) {
         Image (
             bitmap = thumbnail.asImageBitmap(),
