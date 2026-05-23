@@ -10,6 +10,8 @@ import android.util.Size
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -21,6 +23,9 @@ data class SpotlightUiState(
     val selectedMediaSource: MediaSource = MediaSource.LOCAL,
     val currentType: MediaType = MediaType.VIDEO,
     val squareImageFit: Boolean = false,
+    val instantCropZoom: Float = 1f,
+    val instantCropOffsetX: Float = 0f,
+    val instantCropOffsetY: Float = 0f,
 )
 
 class SpotlightViewModel(
@@ -33,6 +38,8 @@ class SpotlightViewModel(
 
     private val _uiState = MutableStateFlow(SpotlightUiState())
     val uiState = _uiState.asStateFlow()
+
+    private var instantCropSaveJob: Job? = null
 
     init {
         loadInitialSettings()
@@ -69,6 +76,30 @@ class SpotlightViewModel(
         }
     }
 
+    fun onInstantCropChanged(zoom: Float, offsetX: Float, offsetY: Float) {
+        val safeZoom = zoom.coerceIn(1f, 5f)
+        val safeOffsetX = offsetX.coerceIn(-1f, 1f)
+        val safeOffsetY = offsetY.coerceIn(-1f, 1f)
+        _uiState.update { currentState ->
+            currentState.copy(
+                instantCropZoom = safeZoom,
+                instantCropOffsetX = safeOffsetX,
+                instantCropOffsetY = safeOffsetY
+            )
+        }
+        instantCropSaveJob?.cancel()
+        instantCropSaveJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(180)
+            repository.setInstantCrop(safeZoom, safeOffsetX, safeOffsetY)
+        }
+    }
+
+    fun resetInstantCrop() {
+        instantCropSaveJob?.cancel()
+        repository.setInstantCrop(1f, 0f, 0f)
+        onInstantCropChanged(1f, 0f, 0f)
+    }
+
     fun onMediaSelected(type: MediaType, uri: Uri?) {
         if (uri == null) return
         val mediaId = resolveMediaId(type, uri)
@@ -102,7 +133,10 @@ class SpotlightViewModel(
                 moduleEnabled = repository.moduleEnabled,
                 selectedMediaSource = MediaSource.fromValue(repository.mediaSource),
                 currentType = MediaType.fromValue(repository.localMediaType),
-                squareImageFit = repository.squareImageFit
+                squareImageFit = repository.squareImageFit,
+                instantCropZoom = repository.instantCropZoom.coerceIn(1f, 5f),
+                instantCropOffsetX = repository.instantCropOffsetX.coerceIn(-1f, 1f),
+                instantCropOffsetY = repository.instantCropOffsetY.coerceIn(-1f, 1f)
             )
         }
     }

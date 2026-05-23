@@ -19,6 +19,13 @@
     <string name="play_sound_button_name">Play Sound</string>
     <string name="enable_log_button_name">Enable Log</string>
     <string name="instant_fit_button_name">Instant Fit</string>
+    <string name="instant_crop_editor_name">Instant crop</string>
+    <string name="instant_crop_editor_hint">Drag inside the dashed box to move it. Drag the corner dots or use Size to resize it.</string>
+    <string name="instant_crop_editor_empty">Pick an image first.</string>
+    <string name="instant_crop_open_button_name">Open Instant crop editor</string>
+    <string name="instant_crop_reset_button_name">Reset</string>
+    <string name="instant_crop_done_button_name">Done</string>
+    <string name="instant_crop_zoom_label">Size</string>
     <string name="inject_control_button_name">Inject Menu</string>
     <string name="manually_rotate_button_name">manually rotate</string>
 

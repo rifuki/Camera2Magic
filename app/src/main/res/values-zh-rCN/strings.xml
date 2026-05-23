@@ -14,6 +14,13 @@
     <string name="play_sound_button_name">播放声音</string>
     <string name="enable_log_button_name">打印日志</string>
     <string name="instant_fit_button_name">Instant适配</string>
+    <string name="instant_crop_editor_name">Instant裁切</string>
+    <string name="instant_crop_editor_hint">拖动虚线框内部移动裁切框。拖动角点或使用大小滑杆调整尺寸。</string>
+    <string name="instant_crop_editor_empty">请先选择图片。</string>
+    <string name="instant_crop_open_button_name">打开Instant裁切编辑器</string>
+    <string name="instant_crop_reset_button_name">重置</string>
+    <string name="instant_crop_done_button_name">完成</string>
+    <string name="instant_crop_zoom_label">大小</string>
     <string name="inject_control_button_name">浮动控制台</string>
     <string name="manually_rotate_button_name">旋转画面</string>
     <string name="work_mode_normal">拍照</string>

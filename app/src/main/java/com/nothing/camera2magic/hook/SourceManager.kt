@@ -37,6 +37,9 @@ object SourceManager {
     private const val KEY_PLAY_SOUND = "main_play_sound"
     private const val KEY_ENABLE_LOG = "main_enable_log"
     private const val KEY_SQUARE_IMAGE_FIT = "main_square_image_fit"
+    private const val KEY_INSTANT_CROP_ZOOM = "main_instant_crop_zoom"
+    private const val KEY_INSTANT_CROP_OFFSET_X = "main_instant_crop_offset_x"
+    private const val KEY_INSTANT_CROP_OFFSET_Y = "main_instant_crop_offset_y"
     private const val KEY_MEDIA_SOURCE = "media_source" // 0: local, 1: network
     private const val KEY_LOCAL_MEDIA_TYPE = "local_media_type" // 0: video, 1: image
     private const val KEY_LOCAL_VIDEO_ID = "local_video_id"
@@ -57,6 +60,12 @@ object SourceManager {
     @Volatile
     var squareImageFit: Boolean = false
         private set
+    @Volatile
+    private var instantCropZoom: Float = 1f
+    @Volatile
+    private var instantCropOffsetX: Float = 0f
+    @Volatile
+    private var instantCropOffsetY: Float = 0f
     @Volatile
     private var mediaSource: Int = 0
     @Volatile
@@ -103,6 +112,9 @@ object SourceManager {
             playSound = prefs.getBoolean(KEY_PLAY_SOUND, false)
             enableLog = prefs.getBoolean(KEY_ENABLE_LOG, false)
             squareImageFit = prefs.getBoolean(KEY_SQUARE_IMAGE_FIT, false)
+            instantCropZoom = prefs.getFloat(KEY_INSTANT_CROP_ZOOM, 1f).coerceIn(1f, 5f)
+            instantCropOffsetX = prefs.getFloat(KEY_INSTANT_CROP_OFFSET_X, 0f).coerceIn(-1f, 1f)
+            instantCropOffsetY = prefs.getFloat(KEY_INSTANT_CROP_OFFSET_Y, 0f).coerceIn(-1f, 1f)
 
             mediaSource = prefs.getInt(KEY_MEDIA_SOURCE, 0)
             mediaType = prefs.getInt(KEY_LOCAL_MEDIA_TYPE, 0)
@@ -115,7 +127,8 @@ object SourceManager {
             NativeBridge.updateGlobalConfig(playSound, enableLog)
             Dog.i(
                 TAG,
-                "prefs enabled=$moduleEnabled media=$selectedMedia image=$imageId squareFit=$squareImageFit log=$enableLog",
+                "prefs enabled=$moduleEnabled media=$selectedMedia image=$imageId " +
+                    "squareFit=$squareImageFit crop=$instantCropZoom,$instantCropOffsetX,$instantCropOffsetY log=$enableLog",
                 enableLog
             )
 
@@ -136,7 +149,7 @@ object SourceManager {
     private fun getMediaFingerprint(): String {
         return when (selectedMedia) {
             0x0000 -> "$selectedMedia:$videoId"
-            0x0001 -> "$selectedMedia:$imageId:$squareImageFit"
+            0x0001 -> "$selectedMedia:$imageId:$squareImageFit:$instantCropZoom:$instantCropOffsetX:$instantCropOffsetY"
             0x0100 -> "$selectedMedia:$rtspUri"
             else -> ""
         }
@@ -273,11 +286,22 @@ object SourceManager {
             paint
         )
 
-        val srcLeft = (bitmap.width - visibleSize) / 2
-        val srcTop = (bitmap.height - visibleSize) / 2
+        val sourceSize = (visibleSize / instantCropZoom.coerceIn(1f, 5f))
+            .roundToInt()
+            .coerceIn(1, visibleSize)
+        val maxSourceOffsetX = ((bitmap.width - sourceSize) / 2f).coerceAtLeast(0f)
+        val maxSourceOffsetY = ((bitmap.height - sourceSize) / 2f).coerceAtLeast(0f)
+        val sourceCenterX = bitmap.width / 2f + instantCropOffsetX.coerceIn(-1f, 1f) * maxSourceOffsetX
+        val sourceCenterY = bitmap.height / 2f + instantCropOffsetY.coerceIn(-1f, 1f) * maxSourceOffsetY
+        val srcLeft = (sourceCenterX - sourceSize / 2f)
+            .roundToInt()
+            .coerceIn(0, bitmap.width - sourceSize)
+        val srcTop = (sourceCenterY - sourceSize / 2f)
+            .roundToInt()
+            .coerceIn(0, bitmap.height - sourceSize)
         canvas.drawBitmap(
             bitmap,
-            Rect(srcLeft, srcTop, srcLeft + visibleSize, srcTop + visibleSize),
+            Rect(srcLeft, srcTop, srcLeft + sourceSize, srcTop + sourceSize),
             RectF(sampledLeft, sampledTop, sampledLeft + sampledSize, sampledTop + sampledSize),
             paint
         )
@@ -285,7 +309,8 @@ object SourceManager {
             TAG,
             "Instant compensate source ${bitmap.width}x${bitmap.height} -> ${frameWidth}x${frameHeight}, " +
                 "surface=${displayWidth}x$quickSnapSurfaceHeight, final=${quickSnapSide}x$quickSnapSide, " +
-                "sample=${sampledLeft.roundToInt()},0 ${sampledSize.roundToInt()}x${sampledSize.roundToInt()}",
+                "sample=${sampledLeft.roundToInt()},0 ${sampledSize.roundToInt()}x${sampledSize.roundToInt()}, " +
+                "src=$srcLeft,$srcTop ${sourceSize}x$sourceSize",
             enableLog
         )
         return instantBitmap

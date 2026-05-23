@@ -111,6 +111,38 @@ class ConfigRepository(private val prefs: SharedPreferences) {
         get() = prefs.getBoolean("main_square_image_fit", false)
         set(value) = save("main_square_image_fit", value)
 
+    var instantCropZoom: Float
+        get() = prefs.getFloat("main_instant_crop_zoom", 1f)
+        set(value) = save("main_instant_crop_zoom", value)
+
+    var instantCropOffsetX: Float
+        get() = prefs.getFloat("main_instant_crop_offset_x", 0f)
+        set(value) = save("main_instant_crop_offset_x", value)
+
+    var instantCropOffsetY: Float
+        get() = prefs.getFloat("main_instant_crop_offset_y", 0f)
+        set(value) = save("main_instant_crop_offset_y", value)
+
+    fun setInstantCrop(zoom: Float, offsetX: Float, offsetY: Float) {
+        prefs.edit {
+            putFloat("main_instant_crop_zoom", zoom)
+            putFloat("main_instant_crop_offset_x", offsetX)
+            putFloat("main_instant_crop_offset_y", offsetY)
+        }
+
+        xposedService?.let { service ->
+            try {
+                service.getRemotePreferences(GROUP_NAME).edit {
+                    putFloat("main_instant_crop_zoom", zoom)
+                    putFloat("main_instant_crop_offset_x", offsetX)
+                    putFloat("main_instant_crop_offset_y", offsetY)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save instant crop remote preferences", e)
+            }
+        }
+    }
+
     var injectMenu: Boolean
         get() = prefs.getBoolean("main_inject_menu", false)
         set(value) = save("main_inject_menu", value)
