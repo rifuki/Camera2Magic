@@ -60,7 +60,15 @@ object Camera2Hooker {
 
     private fun SurfaceInfo.isPreviewCandidate(): Boolean {
         val area = width.toLong() * height.toLong()
-        return format == 1 && area in 1..MAX_PREVIEW_AREA
+
+        // Camera2 preview surfaces may be exposed either as an RGB surface
+        // or as an opaque/private surface.
+        val supportedPreviewFormat =
+            format == 1 ||
+                format == android.graphics.ImageFormat.PRIVATE
+
+        return supportedPreviewFormat &&
+            area in 1..MAX_PREVIEW_AREA
     }
 
     private fun selectPreviewSurface(surfaces: List<Surface>): SurfaceInfo? {
@@ -122,6 +130,120 @@ object Camera2Hooker {
         this.previewHeight = height
         this.surface = surface
     }
+    private fun drawDirectPreview(surface: Surface): Boolean {
+        val bitmap = SourceManager.directPreviewBitmap
+
+        if (bitmap == null || bitmap.isRecycled) {
+            return false
+        }
+
+        var canvas: android.graphics.Canvas? = null
+
+        return try {
+            canvas = try {
+                surface.lockHardwareCanvas()
+            } catch (_: Throwable) {
+                surface.lockCanvas(null)
+            }
+
+            val target = canvas ?: return false
+
+            target.drawColor(android.graphics.Color.BLACK)
+
+            val paint = android.graphics.Paint(
+                android.graphics.Paint.ANTI_ALIAS_FLAG or
+                    android.graphics.Paint.FILTER_BITMAP_FLAG
+            )
+
+            target.drawBitmap(
+                bitmap,
+                android.graphics.Rect(
+                    0,
+                    0,
+                    bitmap.width,
+                    bitmap.height
+                ),
+                android.graphics.Rect(
+                    0,
+                    0,
+                    target.width,
+                    target.height
+                ),
+                paint
+            )
+
+            surface.unlockCanvasAndPost(target)
+            canvas = null
+
+            true
+        } catch (error: Throwable) {
+            Dog.e(
+                TAG,
+                "Unable to draw virtual camera preview.",
+                error,
+                SourceManager.enableLog
+            )
+
+            canvas?.let {
+                runCatching {
+                    surface.unlockCanvasAndPost(it)
+                }
+            }
+
+            false
+        }
+    }
+
+    private fun scheduleRendererStart(
+        camera: CameraDevice,
+        attempt: Int = 0,
+        handler: android.os.Handler = android.os.Handler(
+            android.os.Looper.myLooper()
+                ?: android.os.Looper.getMainLooper()
+        )
+    ) {
+        if (
+            activeCameraRef?.get() !== camera ||
+            !SourceManager.isReadyForHook()
+        ) {
+            return
+        }
+
+        // Re-fetch the state because applications may replace their preview
+        // Surface while the Camera2 session is being configured.
+        val state = getCameraState(camera)
+        val previewSurface = state.surface
+
+        if (previewSurface?.isValid == true) {
+            if (!drawDirectPreview(previewSurface)) {
+                registerSurfaceIfNew(state, true)
+                needStartRenderer()
+            }
+
+            return
+        }
+
+        val maxAttempts = 30
+
+        if (attempt >= maxAttempts) {
+            Dog.e(
+                TAG,
+                "Preview surface remained invalid after $maxAttempts retries.",
+                null,
+                SourceManager.enableLog
+            )
+            return
+        }
+
+        handler.postDelayed({
+            scheduleRendererStart(
+                camera,
+                attempt + 1,
+                handler
+            )
+        }, 50L)
+    }
+
     private fun handleStateCallback(callback: CameraCaptureSession.StateCallback) {
         val clazz = callback.javaClass
         if (hookedClasses.add(clazz)) {
@@ -134,13 +256,7 @@ object Camera2Hooker {
                 val result = chain.proceed()
                 val activeCamera = activeCameraRef?.get()
                 if (activeCamera === camera && SourceManager.isReadyForHook()) {
-                    val state = getCameraState(camera)
-                    if (state.surface?.isValid == true) {
-                        registerSurfaceIfNew(state, true)
-                        needStartRenderer()
-                    } else {
-                        Dog.e(TAG, "Skip renderer start; preview surface is invalid.", null, SourceManager.enableLog)
-                    }
+                    scheduleRendererStart(camera)
                 }
                 result
             }
@@ -156,6 +272,95 @@ object Camera2Hooker {
             }
         }
     }
+    private fun hookImageReaderJpegAcquire() {
+        val acquireNextImage =
+            android.media.ImageReader::class.java.getDeclaredMethod(
+                "acquireNextImage"
+            )
+
+        magic.hook(acquireNextImage).intercept { chain ->
+            val result = chain.proceed()
+
+            val image = result as? android.media.Image
+                ?: return@intercept result
+
+            if (
+                !SourceManager.isReadyForHook() ||
+                activeCameraRef?.get() == null ||
+                image.format != android.graphics.ImageFormat.JPEG
+            ) {
+                return@intercept result
+            }
+
+            runCatching {
+                val bitmap = SourceManager.directPreviewBitmap
+                    ?: throw IllegalStateException(
+                        "No virtual camera bitmap available"
+                    )
+
+                if (bitmap.isRecycled) {
+                    throw IllegalStateException(
+                        "Virtual camera bitmap is recycled"
+                    )
+                }
+
+                val output = java.io.ByteArrayOutputStream()
+
+                if (
+                    !bitmap.compress(
+                        android.graphics.Bitmap.CompressFormat.JPEG,
+                        92,
+                        output
+                    )
+                ) {
+                    throw IllegalStateException(
+                        "Bitmap.compress(JPEG) failed"
+                    )
+                }
+
+                val replacement = output.toByteArray()
+
+                if (replacement.isEmpty()) {
+                    throw IllegalStateException(
+                        "Generated JPEG is empty"
+                    )
+                }
+
+                val plane = image.planes.firstOrNull()
+                    ?: throw IllegalStateException(
+                        "JPEG image has no plane"
+                    )
+
+                val buffer = plane.buffer
+
+                if (buffer.isReadOnly) {
+                    throw IllegalStateException(
+                        "JPEG plane buffer is read-only"
+                    )
+                }
+
+                if (replacement.size > buffer.capacity()) {
+                    throw IllegalStateException(
+                        "Replacement JPEG exceeds capture buffer capacity"
+                    )
+                }
+
+                buffer.clear()
+                buffer.put(replacement)
+                buffer.flip()
+            }.onFailure { error ->
+                Dog.e(
+                    TAG,
+                    "Unable to replace Camera2 JPEG: ${error.message}",
+                    error,
+                    SourceManager.enableLog
+                )
+            }
+
+            result
+        }
+    }
+
     @SuppressLint("PrivateApi")
     fun initHooks(module: MagicHook, param: PackageReadyParam) {
         magic = module
@@ -171,6 +376,8 @@ object Camera2Hooker {
             hookAddTarget()
             hookRemoveTarget()
         }
+
+        hookImageReaderJpegAcquire()
     }
 
     private fun Class<*>.hookCreateCaptureSessionWithConfiguration() {
@@ -269,21 +476,40 @@ object Camera2Hooker {
     }
 
     private fun Class<*>.hookAddTarget() {
-        val addTarget = getDeclaredMethod("addTarget", Surface::class.java)
+        val addTarget = getDeclaredMethod(
+            "addTarget",
+            Surface::class.java
+        )
+
         magic.hook(addTarget).intercept { chain ->
             val origin = chain.args[0] as Surface
+
             if (!SourceManager.isReadyForHook()) {
                 return@intercept chain.proceed()
             }
-            val blackHole = BlackHoleMapper.getBlackHole(origin) ?: run {
-                val info = readSurfaceInfo(origin)
-                if (info?.isPreviewCandidate() == true) {
-                    Dog.i(TAG, "early map request target[${origin.shortId}] ${info.width}x${info.height}", SourceManager.enableLog)
-                    BlackHoleMapper.createBlackHole(origin, info.width, info.height)
-                } else {
-                    null
-                }
-            } ?: return@intercept chain.proceed()
+
+            val blackHole =
+                BlackHoleMapper.getBlackHole(origin) ?: run {
+                    val info = readSurfaceInfo(origin)
+
+                    if (info?.isPreviewCandidate() == true) {
+                        Dog.i(
+                            TAG,
+                            "early map request target[${origin.shortId}] " +
+                                "${info.width}x${info.height}",
+                            SourceManager.enableLog
+                        )
+
+                        BlackHoleMapper.createBlackHole(
+                            origin,
+                            info.width,
+                            info.height
+                        )
+                    } else {
+                        null
+                    }
+                } ?: return@intercept chain.proceed()
+
             chain.proceed(arrayOf(blackHole))
         }
     }

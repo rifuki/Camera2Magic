@@ -13,6 +13,10 @@ import java.io.FileNotFoundException
 
 
 object SourceManager {
+
+    @Volatile
+    var directPreviewBitmap: Bitmap? = null
+
     private const val TAG = "[MediaSource]"
     private const val LOCAL_MEDIA_TYPE_VIDEO = 0x0000
     private const val LOCAL_MEDIA_TYPE_IMAGE = 0x0001
@@ -174,6 +178,12 @@ object SourceManager {
                 BitmapFactory.decodeStream(stream, null, options)
             } ?: throw IllegalStateException("无法解码图片")
             val orientedBitmap = applyExifOrientation(bitmap, exifOrientation)
+
+            directPreviewBitmap?.recycle()
+            directPreviewBitmap = orientedBitmap.copy(
+                Bitmap.Config.ARGB_8888,
+                false
+            )
 
             try {
                 NativeBridge.processBitmap(orientedBitmap)
